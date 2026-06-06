@@ -121,6 +121,22 @@ rm -rf ~/.config/snippettray    # also deletes all saved snippets
 
 ---
 
+## Contributing
+
+Contributions are welcome! If you find a bug or have a feature request, please [open an issue](https://github.com/drakmanga/SnippetTray/issues).
+
+To submit code changes:
+
+1. Fork the repository
+2. Create a new branch (`git checkout -b feature/your-feature`)
+3. Commit your changes (`git commit -m "Add your feature"`)
+4. Push to your branch (`git push origin feature/your-feature`)
+5. Open a Pull Request
+
+Please keep PRs focused — one feature or fix per PR.
+
+---
+
 ## License
 
 MIT
