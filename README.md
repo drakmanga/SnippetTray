@@ -56,10 +56,18 @@ The script will:
 2. Copy `snippettray.py` to `~/.local/bin/`
 3. Create `~/.config/autostart/snippettray.desktop` so the app starts automatically at login
 
-To start immediately without logging out:
+SnippetTray will start automatically at every login. To start it immediately without logging out:
 
 ```bash
 /usr/bin/python3 ~/.local/bin/snippettray.py &
+```
+
+### Updating after code changes
+
+`install.sh` copies `snippettray.py` to `~/.local/bin/`. If you modify the source file later, copy it again to apply the changes:
+
+```bash
+cp ~/IdeaProjects/SnippetTray/snippettray.py ~/.local/bin/snippettray.py
 ```
 
 ---
