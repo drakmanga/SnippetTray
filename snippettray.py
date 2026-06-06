@@ -249,23 +249,27 @@ class MainWindow:
 
     def _render_row(self, idx, snippet):
         bg = ROW_COLORS[idx % 2]
-        row = tk.Frame(self._list, bg=bg, pady=5)
+        row = tk.Frame(self._list, bg=bg)
         row.pack(fill="x")
+        row.columnconfigure(1, weight=1)  # command column takes all extra space
 
         desc = snippet.get("description", "")
         cmd = snippet.get("command", "")
-
-        tk.Label(row, text=desc, bg=bg, width=30, anchor="w",
-                 wraplength=210, justify="left", padx=8).pack(side="left")
-        tk.Label(row, text=cmd, bg=bg, anchor="w",
-                 font=("monospace", 9), fg="#222222").pack(
-                 side="left", fill="x", expand=True, padx=4)
-
-        btns = tk.Frame(row, bg=bg)
-        btns.pack(side="right", padx=6)
-
         keep = snippet.get("keep_open", False)
         sudo = snippet.get("use_sudo", True)
+
+        tk.Label(row, text=desc, bg=bg, anchor="nw", justify="left",
+                 wraplength=200, padx=8, pady=6, width=26).grid(
+                 row=0, column=0, sticky="nsw")
+
+        cmd_label = tk.Label(row, text=cmd, bg=bg, anchor="nw", justify="left",
+                             font=("monospace", 9), fg="#222222", pady=6)
+        cmd_label.grid(row=0, column=1, sticky="ew", padx=4)
+        cmd_label.bind("<Configure>", lambda e, l=cmd_label: l.config(wraplength=e.width))
+
+        btns = tk.Frame(row, bg=bg)
+        btns.grid(row=0, column=2, padx=6, pady=4, sticky="e")
+
         tk.Button(btns, text="Run", width=5, relief="flat",
                   bg="#4CAF50", fg="white", activebackground="#388E3C",
                   command=lambda c=cmd, k=keep, s=sudo: run_snippet(c, k, s)).pack(side="left", padx=2)
