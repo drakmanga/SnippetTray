@@ -25,9 +25,7 @@ SnippetTray sits quietly in your system tray and puts your most-used shell comma
 
 ## Screenshot
 
-> Screenshot coming soon.
-
----
+<img width="861" height="550" alt="Schermata_20260606_142527" src="https://github.com/user-attachments/assets/6ff813e6-4820-4108-bef7-26c98368df01" />
 
 ## Requirements
 
