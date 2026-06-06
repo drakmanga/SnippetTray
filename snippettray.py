@@ -10,7 +10,6 @@ import os
 if os.environ.get("WAYLAND_DISPLAY") and "PYSTRAY_BACKEND" not in os.environ:
     os.environ["PYSTRAY_BACKEND"] = "appindicator"
 import shlex
-import shutil
 import subprocess
 import threading
 import tkinter as tk
@@ -65,20 +64,31 @@ def save_snippets(snippets):
 
 # ── Terminal execution ──────────────────────────────────────────────────────────
 
+def _has_exe(name: str) -> bool:
+    """Return True if `name` is found as an executable on PATH."""
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(directory, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return True
+    return False
+
+
 def _build_terminal_cmd(shell_script):
-    if shutil.which("konsole"):
+    if _has_exe("konsole"):
         return ["konsole", "-e", "bash", "-c", shell_script]
-    if shutil.which("gnome-terminal"):
+    if _has_exe("gnome-terminal"):
         return ["gnome-terminal", "--", "bash", "-c", shell_script]
-    if shutil.which("xfce4-terminal"):
+    if _has_exe("xfce4-terminal"):
         return ["xfce4-terminal", "-e", "bash -c " + shlex.quote(shell_script)]
-    if shutil.which("xterm"):
+    if _has_exe("xterm"):
         return ["xterm", "-e", "bash", "-c", shell_script]
     return None
 
 
-def run_snippet(command):
-    shell_script = f"sudo {command}"
+def run_snippet(command, keep_open=False, use_sudo=True):
+    shell_script = f"sudo {command}" if use_sudo else command
+    if keep_open:
+        shell_script += "\nread -rp 'Press Enter to close...'"
     args = _build_terminal_cmd(shell_script)
     if args is None:
         messagebox.showerror(
@@ -106,7 +116,7 @@ def _make_icon_image():
 # ── Snippet dialog ──────────────────────────────────────────────────────────────
 
 class SnippetDialog(tk.Toplevel):
-    def __init__(self, parent, *, title="Snippet", command="", description=""):
+    def __init__(self, parent, *, title="Snippet", command="", description="", keep_open=False, use_sudo=True):
         super().__init__(parent)
         self.title(title)
         self.resizable(False, False)
@@ -124,8 +134,18 @@ class SnippetDialog(tk.Toplevel):
         tk.Entry(self, textvariable=self._cmd, width=56,
                  font=("monospace", 10)).grid(row=1, column=1, **pad)
 
+        self._use_sudo = tk.BooleanVar(value=use_sudo)
+        tk.Checkbutton(self, text="Run with sudo (as root)",
+                       variable=self._use_sudo).grid(
+                       row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 0))
+
+        self._keep_open = tk.BooleanVar(value=keep_open)
+        tk.Checkbutton(self, text="Keep terminal open after command finishes",
+                       variable=self._keep_open).grid(
+                       row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 0))
+
         btns = tk.Frame(self)
-        btns.grid(row=2, column=0, columnspan=2, pady=(4, 12))
+        btns.grid(row=4, column=0, columnspan=2, pady=(6, 12))
         tk.Button(btns, text="Save", width=10, command=self._save).pack(side="left", padx=6)
         tk.Button(btns, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=6)
 
@@ -146,7 +166,9 @@ class SnippetDialog(tk.Toplevel):
         if not cmd:
             messagebox.showwarning("Validation", "Command cannot be empty.", parent=self)
             return
-        self.result = {"command": cmd, "description": self._desc.get().strip()}
+        self.result = {"command": cmd, "description": self._desc.get().strip(),
+                       "use_sudo": self._use_sudo.get(),
+                       "keep_open": self._keep_open.get()}
         self.destroy()
 
 
@@ -242,9 +264,11 @@ class MainWindow:
         btns = tk.Frame(row, bg=bg)
         btns.pack(side="right", padx=6)
 
+        keep = snippet.get("keep_open", False)
+        sudo = snippet.get("use_sudo", True)
         tk.Button(btns, text="Run", width=5, relief="flat",
                   bg="#4CAF50", fg="white", activebackground="#388E3C",
-                  command=lambda c=cmd: run_snippet(c)).pack(side="left", padx=2)
+                  command=lambda c=cmd, k=keep, s=sudo: run_snippet(c, k, s)).pack(side="left", padx=2)
         tk.Button(btns, text="Copy", width=5, relief="flat",
                   bg="#2196F3", fg="white", activebackground="#1565C0",
                   command=lambda c=cmd: self._copy(c)).pack(side="left", padx=2)
@@ -271,7 +295,9 @@ class MainWindow:
         s = self.snippets[idx]
         dlg = SnippetDialog(self.root, title="Edit Snippet",
                             command=s["command"],
-                            description=s.get("description", ""))
+                            description=s.get("description", ""),
+                            use_sudo=bool(s.get("use_sudo", True)),
+                            keep_open=bool(s.get("keep_open", False)))
         if dlg.result:
             self.snippets[idx] = dlg.result
             save_snippets(self.snippets)
@@ -284,12 +310,12 @@ class MainWindow:
             save_snippets(self.snippets)
             self._render()
 
-    def show(self):
+    def show(self, *_: object) -> None:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
 
-    def hide(self):
+    def hide(self) -> None:
         self.root.withdraw()
 
 
@@ -309,12 +335,15 @@ class SnippetTrayApp:
         )
         return pystray.Icon("snippettray", _make_icon_image(), "SnippetTray", menu)
 
-    def _open(self, *_):
-        self.root.after(0, self.window.show)
+    def _open(self, icon=None, item=None):
+        self.root.after_idle(self.window.show, None)
 
-    def _quit(self, *_):
+    def _quit(self, icon=None, item=None):
         self.icon.stop()
-        self.root.after(0, self.root.quit)
+        self.root.after_idle(self._quit_app, None)
+
+    def _quit_app(self, *_: object) -> None:
+        self.root.quit()
 
     def run(self):
         self.root.withdraw()

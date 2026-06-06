@@ -88,6 +88,11 @@ Click **+ Add Snippet** and fill in two fields:
 - **Description** — a short label shown in the list (e.g. `Restart nginx`)
 - **Command** — the shell command, without `sudo` (it is prepended automatically at runtime)
 
+There are also two checkboxes:
+
+- **Run with sudo (as root)** — enabled by default. Uncheck it for commands that must run as your normal user (e.g. user-space installers that explicitly reject root).
+- **Keep terminal open after command finishes** — disabled by default. Enable it for interactive commands that prompt for input during execution (e.g. an installer that asks questions). Leave it unchecked for commands that run and exit on their own.
+
 Press **Save** or Enter to confirm, Escape to cancel.
 
 ### Running a command
