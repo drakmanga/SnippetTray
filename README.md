@@ -47,7 +47,7 @@ SnippetTray sits quietly in your system tray and puts your most-used shell comma
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/snippettray.git
+git clone git clone https://github.com/drakmanga/SnippetTray.git
 cd snippettray
 bash install.sh
 ```
