@@ -85,8 +85,10 @@ def _build_terminal_cmd(shell_script):
     return None
 
 
-def run_snippet(command, keep_open=False, use_sudo=True):
+def run_snippet(command, keep_open=False, use_sudo=True, working_dir=""):
     shell_script = f"sudo {command}" if use_sudo else command
+    if working_dir:
+        shell_script = f"cd {shlex.quote(os.path.expanduser(working_dir))} && {shell_script}"
     if keep_open:
         shell_script += "\nread -rp 'Press Enter to close...'"
     args = _build_terminal_cmd(shell_script)
@@ -116,7 +118,7 @@ def _make_icon_image():
 # ── Snippet dialog ──────────────────────────────────────────────────────────────
 
 class SnippetDialog(tk.Toplevel):
-    def __init__(self, parent, *, title="Snippet", command="", description="", keep_open=False, use_sudo=True):
+    def __init__(self, parent, *, title="Snippet", command="", description="", keep_open=False, use_sudo=True, working_dir=""):
         super().__init__(parent)
         self.title(title)
         self.resizable(False, False)
@@ -129,23 +131,28 @@ class SnippetDialog(tk.Toplevel):
         self._desc = tk.StringVar(value=description)
         tk.Entry(self, textvariable=self._desc, width=56).grid(row=0, column=1, **pad)
 
-        tk.Label(self, text="Command:", anchor="w").grid(row=1, column=0, sticky="w", **pad)
+        tk.Label(self, text="Working Dir:", anchor="w").grid(row=1, column=0, sticky="w", **pad)
+        self._wdir = tk.StringVar(value=working_dir)
+        tk.Entry(self, textvariable=self._wdir, width=56,
+                 font=("monospace", 10)).grid(row=1, column=1, **pad)
+
+        tk.Label(self, text="Command:", anchor="w").grid(row=2, column=0, sticky="w", **pad)
         self._cmd = tk.StringVar(value=command)
         tk.Entry(self, textvariable=self._cmd, width=56,
-                 font=("monospace", 10)).grid(row=1, column=1, **pad)
+                 font=("monospace", 10)).grid(row=2, column=1, **pad)
 
         self._use_sudo = tk.BooleanVar(value=use_sudo)
         tk.Checkbutton(self, text="Run with sudo (as root)",
                        variable=self._use_sudo).grid(
-                       row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 0))
+                       row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 0))
 
         self._keep_open = tk.BooleanVar(value=keep_open)
         tk.Checkbutton(self, text="Keep terminal open after command finishes",
                        variable=self._keep_open).grid(
-                       row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 0))
+                       row=4, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 0))
 
         btns = tk.Frame(self)
-        btns.grid(row=4, column=0, columnspan=2, pady=(6, 12))
+        btns.grid(row=5, column=0, columnspan=2, pady=(6, 12))
         tk.Button(btns, text="Save", width=10, command=self._save).pack(side="left", padx=6)
         tk.Button(btns, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=6)
 
@@ -167,6 +174,7 @@ class SnippetDialog(tk.Toplevel):
             messagebox.showwarning("Validation", "Command cannot be empty.", parent=self)
             return
         self.result = {"command": cmd, "description": self._desc.get().strip(),
+                       "working_dir": self._wdir.get().strip(),
                        "use_sudo": self._use_sudo.get(),
                        "keep_open": self._keep_open.get()}
         self.destroy()
@@ -257,6 +265,7 @@ class MainWindow:
         cmd = snippet.get("command", "")
         keep = snippet.get("keep_open", False)
         sudo = snippet.get("use_sudo", True)
+        wdir = snippet.get("working_dir", "")
 
         tk.Label(row, text=desc, bg=bg, anchor="nw", justify="left",
                  wraplength=200, padx=8, pady=6, width=26).grid(
@@ -272,7 +281,7 @@ class MainWindow:
 
         tk.Button(btns, text="Run", width=5, relief="flat",
                   bg="#4CAF50", fg="white", activebackground="#388E3C",
-                  command=lambda c=cmd, k=keep, s=sudo: run_snippet(c, k, s)).pack(side="left", padx=2)
+                  command=lambda c=cmd, k=keep, s=sudo, w=wdir: run_snippet(c, k, s, w)).pack(side="left", padx=2)
         tk.Button(btns, text="Copy", width=5, relief="flat",
                   bg="#2196F3", fg="white", activebackground="#1565C0",
                   command=lambda c=cmd: self._copy(c)).pack(side="left", padx=2)
@@ -300,6 +309,7 @@ class MainWindow:
         dlg = SnippetDialog(self.root, title="Edit Snippet",
                             command=s["command"],
                             description=s.get("description", ""),
+                            working_dir=s.get("working_dir", ""),
                             use_sudo=bool(s.get("use_sudo", True)),
                             keep_open=bool(s.get("keep_open", False)))
         if dlg.result:
