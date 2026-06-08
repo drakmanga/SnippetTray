@@ -91,15 +91,18 @@ Closing the window hides it back to the tray. Use **Quit** from the tray menu to
 
 ### Adding a snippet
 
-Click **+ Add Snippet** and fill in two fields:
+Click **+ Add Snippet** and fill in the fields:
 
 - **Description** — a short label shown in the list (e.g. `Restart nginx`)
-- **Command** — the shell command, without `sudo` (it is prepended automatically at runtime)
+- **Working Dir** *(optional)* — directory to `cd` into before running the command (e.g. `~/my-project`). Useful when the executable must be run from a specific folder. Supports `~` expansion.
+- **Command** — the shell command, without `sudo` (it is prepended automatically at runtime). You can use shell operators like `&&`, `;`, or `&` for chaining or backgrounding.
 
 There are also two checkboxes:
 
 - **Run with sudo (as root)** — enabled by default. Uncheck it for commands that must run as your normal user (e.g. user-space installers that explicitly reject root).
 - **Keep terminal open after command finishes** — disabled by default. Enable it for interactive commands that prompt for input during execution (e.g. an installer that asks questions). Leave it unchecked for commands that run and exit on their own.
+
+> **Note:** if you use `&&` or `;` in the Command field with sudo enabled, `sudo` is prepended to the entire string — so the first command in the chain runs as root. If you need to `cd` first, use the **Working Dir** field instead, which is always executed before (and separately from) sudo.
 
 Press **Save** or Enter to confirm, Escape to cancel.
 
