@@ -18,8 +18,8 @@ else
     echo "Using $PYTHON"
 fi
 
-echo "[1/3] Installing Python dependencies (pystray, Pillow)..."
-"$PYTHON" -m pip install --user pystray Pillow
+echo "[1/3] Installing Python dependencies (pystray, Pillow, PyQt6)..."
+"$PYTHON" -m pip install --user pystray Pillow PyQt6
 
 echo "[2/3] Installing snippettray.py to $BIN_DIR ..."
 mkdir -p "$BIN_DIR"

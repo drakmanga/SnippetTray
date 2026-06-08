@@ -1,45 +1,79 @@
 #!/usr/bin/env python3
-# External dependencies: pystray, Pillow  (pip install pystray Pillow)
+# External dependencies: pystray, Pillow, PyQt6  (pip install pystray Pillow PyQt6)
 
 import json
 import os
-
-# On Wayland (KDE/GNOME), pystray's default X11 backend doesn't receive click
-# events. Force the appindicator backend which uses the StatusNotifierItem
-# protocol supported by KDE Plasma, GNOME (with extension), etc.
-if os.environ.get("WAYLAND_DISPLAY") and "PYSTRAY_BACKEND" not in os.environ:
-    os.environ["PYSTRAY_BACKEND"] = "appindicator"
 import shlex
 import subprocess
+import sys
 import threading
-import tkinter as tk
-from tkinter import messagebox
 from pathlib import Path
+
+if os.environ.get("WAYLAND_DISPLAY") and "PYSTRAY_BACKEND" not in os.environ:
+    os.environ["PYSTRAY_BACKEND"] = "appindicator"
 
 import pystray
 from PIL import Image, ImageDraw
+
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtGui import QFont, QKeySequence, QPalette, QShortcut
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QDialog, QFormLayout, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+)
 
 
 CONFIG_DIR = Path.home() / ".config" / "snippettray"
 SNIPPETS_FILE = CONFIG_DIR / "snippets.json"
 
 DEFAULT_SNIPPETS = [
-    {
-        "command": "apt update && apt upgrade -y",
-        "description": "Update system packages (Debian/Ubuntu)",
-    },
-    {
-        "command": "journalctl -xe --no-pager | tail -100",
-        "description": "View recent system log entries",
-    },
-    {
-        "command": "df -h && echo && free -h",
-        "description": "Check disk and memory usage",
-    },
+    {"command": "apt update && apt upgrade -y", "description": "Update system packages (Debian/Ubuntu)"},
+    {"command": "journalctl -xe --no-pager | tail -100", "description": "View recent system log entries"},
+    {"command": "df -h && echo && free -h", "description": "Check disk and memory usage"},
 ]
 
-ROW_COLORS = ("#ffffff", "#f0f4f8")
-HEADER_BG = "#dbe9f7"
+_QSS = """
+QPushButton {
+    border-radius: 4px;
+    padding: 4px 10px;
+}
+QPushButton#runButton   { background: #43A047; color: #fff; border: none; }
+QPushButton#runButton:hover   { background: #388E3C; }
+QPushButton#runButton:pressed { background: #2E7D32; }
+
+QPushButton#copyButton   { background: #1E88E5; color: #fff; border: none; }
+QPushButton#copyButton:hover   { background: #1565C0; }
+QPushButton#copyButton:pressed { background: #0D47A1; }
+
+QPushButton#editButton   { background: #FB8C00; color: #fff; border: none; }
+QPushButton#editButton:hover   { background: #E65100; }
+QPushButton#editButton:pressed { background: #BF360C; }
+
+QPushButton#deleteButton   { background: #E53935; color: #fff; border: none; }
+QPushButton#deleteButton:hover   { background: #C62828; }
+QPushButton#deleteButton:pressed { background: #B71C1C; }
+
+QPushButton#addButton {
+    background: #43A047; color: #fff; border: none;
+    padding: 6px 14px; border-radius: 4px;
+}
+QPushButton#addButton:hover   { background: #388E3C; }
+QPushButton#addButton:pressed { background: #2E7D32; }
+
+QPushButton#saveButton {
+    background: #43A047; color: #fff; border: none;
+    padding: 6px 18px; border-radius: 4px;
+}
+QPushButton#saveButton:hover   { background: #388E3C; }
+QPushButton#saveButton:pressed { background: #2E7D32; }
+
+QPushButton#cancelButton {
+    padding: 6px 18px; border-radius: 4px;
+}
+QPushButton#cancelButton:hover   { background: palette(mid); }
+QPushButton#cancelButton:pressed { background: palette(dark); }
+"""
 
 
 # ── Persistence ────────────────────────────────────────────────────────────────
@@ -65,7 +99,6 @@ def save_snippets(snippets):
 # ── Terminal execution ──────────────────────────────────────────────────────────
 
 def _has_exe(name: str) -> bool:
-    """Return True if `name` is found as an executable on PATH."""
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         candidate = os.path.join(directory, name)
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
@@ -93,8 +126,8 @@ def run_snippet(command, keep_open=False, use_sudo=True, working_dir=""):
         shell_script += "\nread -rp 'Press Enter to close...'"
     args = _build_terminal_cmd(shell_script)
     if args is None:
-        messagebox.showerror(
-            "No Terminal Found",
+        QMessageBox.critical(
+            None, "No Terminal Found",
             "No terminal emulator was found.\n"
             "Please install one of: konsole, gnome-terminal, xfce4-terminal, xterm",
         )
@@ -115,230 +148,325 @@ def _make_icon_image():
     return img
 
 
+# ── Thread bridge ───────────────────────────────────────────────────────────────
+
+class _Bridge(QObject):
+    show_requested = pyqtSignal()
+
+
 # ── Snippet dialog ──────────────────────────────────────────────────────────────
 
-class SnippetDialog(tk.Toplevel):
-    def __init__(self, parent, *, title="Snippet", command="", description="", keep_open=False, use_sudo=True, working_dir=""):
+class SnippetDialog(QDialog):
+    def __init__(self, parent=None, *, title="Snippet", command="", description="",
+                 keep_open=False, use_sudo=True, working_dir=""):
         super().__init__(parent)
-        self.title(title)
-        self.resizable(False, False)
-        self.grab_set()
-        self.result = None
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.result_data = None
 
-        pad = {"padx": 12, "pady": 7}
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        tk.Label(self, text="Description:", anchor="w").grid(row=0, column=0, sticky="w", **pad)
-        self._desc = tk.StringVar(value=description)
-        tk.Entry(self, textvariable=self._desc, width=56).grid(row=0, column=1, **pad)
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        tk.Label(self, text="Working Dir:", anchor="w").grid(row=1, column=0, sticky="w", **pad)
-        self._wdir = tk.StringVar(value=working_dir)
-        tk.Entry(self, textvariable=self._wdir, width=56,
-                 font=("monospace", 10)).grid(row=1, column=1, **pad)
+        self._desc = QLineEdit(description)
+        self._desc.setPlaceholderText("e.g. Update system packages")
+        form.addRow("Description:", self._desc)
 
-        tk.Label(self, text="Command:", anchor="w").grid(row=2, column=0, sticky="w", **pad)
-        self._cmd = tk.StringVar(value=command)
-        tk.Entry(self, textvariable=self._cmd, width=56,
-                 font=("monospace", 10)).grid(row=2, column=1, **pad)
+        self._wdir = QLineEdit(working_dir)
+        self._wdir.setFont(QFont("monospace", 10))
+        self._wdir.setPlaceholderText("~/projects/myapp  (leave empty for default)")
+        form.addRow("Working Dir:", self._wdir)
 
-        self._use_sudo = tk.BooleanVar(value=use_sudo)
-        tk.Checkbutton(self, text="Run with sudo (as root)",
-                       variable=self._use_sudo).grid(
-                       row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(2, 0))
+        self._cmd = QLineEdit(command)
+        self._cmd.setFont(QFont("monospace", 10))
+        self._cmd.setPlaceholderText("e.g. apt update && apt upgrade -y")
+        form.addRow("Command:", self._cmd)
 
-        self._keep_open = tk.BooleanVar(value=keep_open)
-        tk.Checkbutton(self, text="Keep terminal open after command finishes",
-                       variable=self._keep_open).grid(
-                       row=4, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 0))
+        layout.addLayout(form)
 
-        btns = tk.Frame(self)
-        btns.grid(row=5, column=0, columnspan=2, pady=(6, 12))
-        tk.Button(btns, text="Save", width=10, command=self._save).pack(side="left", padx=6)
-        tk.Button(btns, text="Cancel", width=10, command=self.destroy).pack(side="left", padx=6)
+        self._sudo = QCheckBox("Run with sudo (as root)")
+        self._sudo.setChecked(use_sudo)
+        layout.addWidget(self._sudo)
 
-        self.bind("<Return>", lambda _: self._save())
-        self.bind("<Escape>", lambda _: self.destroy())
-        self.transient(parent)
+        self._keep = QCheckBox("Keep terminal open after command finishes")
+        self._keep.setChecked(keep_open)
+        layout.addWidget(self._keep)
 
-        self.update_idletasks()
-        px, py = parent.winfo_rootx(), parent.winfo_rooty()
-        pw, ph = parent.winfo_width(), parent.winfo_height()
-        sw, sh = self.winfo_width(), self.winfo_height()
-        self.geometry(f"+{px + (pw - sw) // 2}+{py + (ph - sh) // 2}")
+        layout.addSpacing(4)
 
-        self.wait_window()
+        btns = QHBoxLayout()
+        btns.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelButton")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(cancel_btn)
+        save_btn = QPushButton("Save")
+        save_btn.setObjectName("saveButton")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._save)
+        btns.addWidget(save_btn)
+        layout.addLayout(btns)
+
+        QShortcut(QKeySequence("Escape"), self, self.reject)
 
     def _save(self):
-        cmd = self._cmd.get().strip()
+        cmd = self._cmd.text().strip()
         if not cmd:
-            messagebox.showwarning("Validation", "Command cannot be empty.", parent=self)
+            QMessageBox.warning(self, "Validation", "Command cannot be empty.")
             return
-        self.result = {"command": cmd, "description": self._desc.get().strip(),
-                       "working_dir": self._wdir.get().strip(),
-                       "use_sudo": self._use_sudo.get(),
-                       "keep_open": self._keep_open.get()}
-        self.destroy()
+        self.result_data = {
+            "command": cmd,
+            "description": self._desc.text().strip(),
+            "working_dir": self._wdir.text().strip(),
+            "use_sudo": self._sudo.isChecked(),
+            "keep_open": self._keep.isChecked(),
+        }
+        self.accept()
 
 
 # ── Main window ─────────────────────────────────────────────────────────────────
 
-class MainWindow:
-    def __init__(self, root):
-        self.root = root
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
         self.snippets = load_snippets()
         self._build_ui()
 
     def _build_ui(self):
-        self.root.title("SnippetTray")
-        self.root.minsize(600, 400)
-        self.root.geometry("860x520")
-        self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        self.setWindowTitle("SnippetTray")
+        self.setMinimumSize(720, 440)
+        self.resize(960, 580)
 
-        bar = tk.Frame(self.root, bg="#f0f0f0")
-        bar.pack(fill="x")
-        tk.Label(bar, text=" SnippetTray", font=("", 13, "bold"),
-                 bg="#f0f0f0").pack(side="left", pady=8, padx=6)
-        tk.Button(bar, text="+ Add Snippet", command=self._add,
-                  bg="#4CAF50", fg="white", activebackground="#388E3C",
-                  relief="flat", padx=10).pack(side="right", pady=6, padx=10)
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        tk.Frame(self.root, height=1, bg="#c0c0c0").pack(fill="x")
+        # ── Toolbar ──
+        toolbar = QWidget()
+        tb = QHBoxLayout(toolbar)
+        tb.setContentsMargins(16, 10, 16, 10)
+        title_lbl = QLabel("SnippetTray")
+        title_lbl.setFont(QFont("", 14, QFont.Weight.Bold))
+        tb.addWidget(title_lbl)
+        tb.addStretch()
+        add_btn = QPushButton("+ Add Snippet")
+        add_btn.setObjectName("addButton")
+        add_btn.setFixedHeight(32)
+        add_btn.clicked.connect(self._add)
+        tb.addWidget(add_btn)
+        root.addWidget(toolbar)
 
-        hdr = tk.Frame(self.root, bg=HEADER_BG)
-        hdr.pack(fill="x")
-        tk.Label(hdr, text="  Description", bg=HEADER_BG,
-                 font=("", 9, "bold"), width=30, anchor="w").pack(side="left", pady=5)
-        tk.Label(hdr, text="Command", bg=HEADER_BG,
-                 font=("", 9, "bold"), anchor="w").pack(side="left", pady=5, fill="x", expand=True)
-        tk.Label(hdr, text="Actions", bg=HEADER_BG,
-                 font=("", 9, "bold"), anchor="center", width=26).pack(side="right", pady=5, padx=4)
+        _sep(root)
 
-        frame = tk.Frame(self.root)
-        frame.pack(fill="both", expand=True)
+        # ── Column headers ──
+        hdr = QWidget()
+        hdr_layout = QHBoxLayout(hdr)
+        hdr_layout.setContentsMargins(16, 5, 16, 5)
+        bold9 = QFont("", 9, QFont.Weight.Bold)
+        lbl_d = QLabel("Description")
+        lbl_d.setFont(bold9)
+        lbl_d.setFixedWidth(220)
+        hdr_layout.addWidget(lbl_d)
+        lbl_c = QLabel("Command")
+        lbl_c.setFont(bold9)
+        hdr_layout.addWidget(lbl_c, stretch=1)
+        lbl_a = QLabel("Actions")
+        lbl_a.setFont(bold9)
+        lbl_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_a.setFixedWidth(236)
+        hdr_layout.addWidget(lbl_a)
+        root.addWidget(hdr)
 
-        self._canvas = tk.Canvas(frame, highlightthickness=0, bg="#ffffff")
-        sb = tk.Scrollbar(frame, orient="vertical", command=self._canvas.yview)
-        self._canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self._canvas.pack(side="left", fill="both", expand=True)
+        _sep(root)
 
-        self._list = tk.Frame(self._canvas, bg="#ffffff")
-        self._win = self._canvas.create_window((0, 0), window=self._list, anchor="nw")
-
-        self._list.bind("<Configure>", lambda _: self._canvas.configure(
-            scrollregion=self._canvas.bbox("all")))
-        self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfig(
-            self._win, width=e.width))
-        self._canvas.bind("<Enter>", self._enable_scroll)
-        self._canvas.bind("<Leave>", self._disable_scroll)
+        # ── Scrollable snippet list ──
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._list_widget = QWidget()
+        self._list_layout = QVBoxLayout(self._list_widget)
+        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        self._list_layout.setSpacing(0)
+        self._list_layout.addStretch(1)
+        self._scroll.setWidget(self._list_widget)
+        root.addWidget(self._scroll, stretch=1)
 
         self._render()
 
-    def _enable_scroll(self, _=None):
-        self._canvas.bind_all("<Button-4>", lambda _: self._canvas.yview_scroll(-1, "units"))
-        self._canvas.bind_all("<Button-5>", lambda _: self._canvas.yview_scroll(1, "units"))
-
-    def _disable_scroll(self, _=None):
-        self._canvas.unbind_all("<Button-4>")
-        self._canvas.unbind_all("<Button-5>")
-
     def _render(self):
-        for w in self._list.winfo_children():
-            w.destroy()
+        while self._list_layout.count() > 1:
+            item = self._list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
         if not self.snippets:
-            tk.Label(self._list,
-                     text="No snippets yet.\nClick '+ Add Snippet' to create one.",
-                     fg="#888888", bg="#ffffff", pady=40, font=("", 11)).pack()
+            empty = QLabel("No snippets yet.\nClick '+ Add Snippet' to create one.")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setStyleSheet("color: gray; font-size: 13px;")
+            empty.setMinimumHeight(140)
+            self._list_layout.insertWidget(0, empty)
             return
 
+        alt_color = QApplication.palette().color(QPalette.ColorRole.AlternateBase)
+
         for idx, snippet in enumerate(self.snippets):
-            self._render_row(idx, snippet)
+            row = self._make_row(idx, snippet)
+            if idx % 2 == 1:
+                row.setAutoFillBackground(True)
+                p = row.palette()
+                p.setColor(QPalette.ColorRole.Window, alt_color)
+                row.setPalette(p)
+            self._list_layout.insertWidget(idx, row)
 
-    def _render_row(self, idx, snippet):
-        bg = ROW_COLORS[idx % 2]
-        row = tk.Frame(self._list, bg=bg)
-        row.pack(fill="x")
-        row.columnconfigure(1, weight=1)  # command column takes all extra space
-
+    def _make_row(self, idx, snippet):
         desc = snippet.get("description", "")
         cmd = snippet.get("command", "")
         keep = snippet.get("keep_open", False)
         sudo = snippet.get("use_sudo", True)
         wdir = snippet.get("working_dir", "")
 
-        tk.Label(row, text=desc, bg=bg, anchor="nw", justify="left",
-                 wraplength=200, padx=8, pady=6, width=26).grid(
-                 row=0, column=0, sticky="nsw")
+        container = QFrame()
+        vl = QVBoxLayout(container)
+        vl.setContentsMargins(0, 0, 0, 0)
+        vl.setSpacing(0)
 
-        cmd_label = tk.Label(row, text=cmd, bg=bg, anchor="nw", justify="left",
-                             font=("monospace", 9), fg="#222222", pady=6)
-        cmd_label.grid(row=0, column=1, sticky="ew", padx=4)
-        cmd_label.bind("<Configure>", lambda e, l=cmd_label: l.config(wraplength=e.width))
+        content = QWidget()
+        hl = QHBoxLayout(content)
+        hl.setContentsMargins(16, 8, 16, 8)
+        hl.setSpacing(8)
 
-        btns = tk.Frame(row, bg=bg)
-        btns.grid(row=0, column=2, padx=6, pady=4, sticky="e")
+        desc_lbl = QLabel(desc or "(no description)")
+        desc_lbl.setWordWrap(True)
+        desc_lbl.setFixedWidth(220)
+        if not desc:
+            desc_lbl.setStyleSheet("color: gray;")
+        hl.addWidget(desc_lbl)
 
-        tk.Button(btns, text="Run", width=5, relief="flat",
-                  bg="#4CAF50", fg="white", activebackground="#388E3C",
-                  command=lambda c=cmd, k=keep, s=sudo, w=wdir: run_snippet(c, k, s, w)).pack(side="left", padx=2)
-        tk.Button(btns, text="Copy", width=5, relief="flat",
-                  bg="#2196F3", fg="white", activebackground="#1565C0",
-                  command=lambda c=cmd: self._copy(c)).pack(side="left", padx=2)
-        tk.Button(btns, text="Edit", width=5, relief="flat",
-                  bg="#FF9800", fg="white", activebackground="#E65100",
-                  command=lambda i=idx: self._edit(i)).pack(side="left", padx=2)
-        tk.Button(btns, text="Del", width=4, relief="flat",
-                  bg="#f44336", fg="white", activebackground="#B71C1C",
-                  command=lambda i=idx: self._delete(i)).pack(side="left", padx=2)
+        cmd_lbl = QLabel(cmd)
+        cmd_lbl.setFont(QFont("monospace", 9))
+        cmd_lbl.setWordWrap(True)
+        cmd_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        hl.addWidget(cmd_lbl, stretch=1)
+
+        btns_widget = QWidget()
+        btns_widget.setFixedWidth(236)
+        btns = QHBoxLayout(btns_widget)
+        btns.setContentsMargins(0, 0, 0, 0)
+        btns.setSpacing(4)
+
+        run_btn = QPushButton("Run")
+        run_btn.setObjectName("runButton")
+        run_btn.setFixedWidth(54)
+        run_btn.clicked.connect(lambda _, c=cmd, k=keep, s=sudo, w=wdir: run_snippet(c, k, s, w))
+        btns.addWidget(run_btn)
+
+        copy_btn = QPushButton("Copy")
+        copy_btn.setObjectName("copyButton")
+        copy_btn.setFixedWidth(54)
+        copy_btn.clicked.connect(lambda _, c=cmd: self._copy(c))
+        btns.addWidget(copy_btn)
+
+        edit_btn = QPushButton("Edit")
+        edit_btn.setObjectName("editButton")
+        edit_btn.setFixedWidth(54)
+        edit_btn.clicked.connect(lambda _, i=idx: self._edit(i))
+        btns.addWidget(edit_btn)
+
+        del_btn = QPushButton("Del")
+        del_btn.setObjectName("deleteButton")
+        del_btn.setFixedWidth(46)
+        del_btn.clicked.connect(lambda _, i=idx: self._delete(i))
+        btns.addWidget(del_btn)
+
+        hl.addWidget(btns_widget)
+        vl.addWidget(content)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Plain)
+        vl.addWidget(sep)
+
+        return container
 
     def _copy(self, text):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self.root.update()
+        QApplication.clipboard().setText(text)
 
     def _add(self):
-        dlg = SnippetDialog(self.root, title="Add Snippet")
-        if dlg.result:
-            self.snippets.append(dlg.result)
+        dlg = SnippetDialog(self, title="Add Snippet")
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
+            self.snippets.append(dlg.result_data)
             save_snippets(self.snippets)
             self._render()
 
     def _edit(self, idx):
         s = self.snippets[idx]
-        dlg = SnippetDialog(self.root, title="Edit Snippet",
-                            command=s["command"],
-                            description=s.get("description", ""),
-                            working_dir=s.get("working_dir", ""),
-                            use_sudo=bool(s.get("use_sudo", True)),
-                            keep_open=bool(s.get("keep_open", False)))
-        if dlg.result:
-            self.snippets[idx] = dlg.result
+        dlg = SnippetDialog(
+            self, title="Edit Snippet",
+            command=s["command"],
+            description=s.get("description", ""),
+            working_dir=s.get("working_dir", ""),
+            use_sudo=bool(s.get("use_sudo", True)),
+            keep_open=bool(s.get("keep_open", False)),
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
+            self.snippets[idx] = dlg.result_data
             save_snippets(self.snippets)
             self._render()
 
     def _delete(self, idx):
         name = self.snippets[idx].get("description") or self.snippets[idx]["command"]
-        if messagebox.askyesno("Confirm Delete", f"Delete snippet:\n{name!r}?", parent=self.root):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Confirm Delete")
+        msg.setText(f"Delete snippet:\n{name!r}?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        msg.button(QMessageBox.StandardButton.Yes).setStyleSheet(
+            "QPushButton{background:#E53935;color:#fff;border:none;border-radius:4px;padding:6px 18px;}"
+            "QPushButton:hover{background:#C62828;}"
+            "QPushButton:pressed{background:#B71C1C;}"
+        )
+        msg.button(QMessageBox.StandardButton.No).setStyleSheet(
+            "QPushButton{border-radius:4px;padding:6px 18px;}"
+            "QPushButton:hover{background:palette(mid);}"
+            "QPushButton:pressed{background:palette(dark);}"
+        )
+        if msg.exec() == QMessageBox.StandardButton.Yes:
             self.snippets.pop(idx)
             save_snippets(self.snippets)
             self._render()
 
-    def show(self, *_: object) -> None:
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
+    def show_and_raise(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
-    def hide(self) -> None:
-        self.root.withdraw()
+    def closeEvent(self, event):
+        event.ignore()
+        self.hide()
+
+
+def _sep(layout: QVBoxLayout):
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFrameShadow(QFrame.Shadow.Sunken)
+    layout.addWidget(line)
 
 
 # ── App entry point ─────────────────────────────────────────────────────────────
 
 class SnippetTrayApp:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.window = MainWindow(self.root)
+    def __init__(self, app: QApplication):
+        self.app = app
+        self.window = MainWindow()
+        self.bridge = _Bridge()
+        self.bridge.show_requested.connect(self.window.show_and_raise)
         self.icon = self._create_tray_icon()
 
     def _create_tray_icon(self):
@@ -350,20 +478,20 @@ class SnippetTrayApp:
         return pystray.Icon("snippettray", _make_icon_image(), "SnippetTray", menu)
 
     def _open(self, icon=None, item=None):
-        self.root.after_idle(self.window.show, None)
+        self.bridge.show_requested.emit()
 
     def _quit(self, icon=None, item=None):
         self.icon.stop()
-        self.root.after_idle(self._quit_app, None)
-
-    def _quit_app(self, *_: object) -> None:
-        self.root.quit()
+        self.app.quit()
 
     def run(self):
-        self.root.withdraw()
         threading.Thread(target=self.icon.run, daemon=True).start()
-        self.root.mainloop()
+        sys.exit(self.app.exec())
 
 
 if __name__ == "__main__":
-    SnippetTrayApp().run()
+    app = QApplication(sys.argv)
+    app.setApplicationName("SnippetTray")
+    app.setStyle("Fusion")
+    app.setStyleSheet(_QSS)
+    SnippetTrayApp(app).run()
